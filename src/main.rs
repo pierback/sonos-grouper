@@ -46,8 +46,16 @@ async fn discover_devices() -> Result<()> {
 
         // Attempt to find a coordinator for the speaker to join
         if let Some(coordinator_name) = get_coordinator_to_join_group(&speaker).await? {
+            // Find the Sonos speaker with the specified name
+            let coordinator = sonor::find(&coordinator_name, Duration::from_secs(5))
+                .await?
+                .unwrap_or_else(|| panic!("speaker '{}' doesn't exist", name));
+
             speaker.join(&coordinator_name).await?;
             println!("Join: {:?}\n", speaker.name().await?);
+
+            align_speaker_volume(&coordinator, &speaker).await?;
+
             continue;
         }
 
@@ -73,13 +81,22 @@ async fn join_them_all(devices: Vec<String>) -> Result<()> {
     }
 
     // Find the first device in the list and make it the coordinator of the group
-    let speaker = sonor::find(&devices[0], Duration::from_secs(3))
+    let coordinator = sonor::find(&devices[0], Duration::from_secs(3))
         .await?
         .unwrap_or_else(|| panic!("speaker '{}' doesn't exist", &devices[0]));
 
     // Join all the remaining devices to the coordinator device
     for sp in &devices[1..] {
-        speaker.join(&sp).await?;
+        coordinator.join(&sp).await?;
+
+        // after joining set the volume of speaker to group volume
+        {
+            let speaker = sonor::find(&sp, Duration::from_secs(5))
+                .await?
+                .unwrap_or_else(|| panic!("speaker '{}' doesn't exist", sp));
+
+            align_speaker_volume(&coordinator, &speaker).await?;
+        }
     }
 
     Ok(())
@@ -150,4 +167,31 @@ async fn get_coordinator_to_join_group(speaker: &Speaker) -> Result<Option<Strin
     });
 
     Ok(result)
+}
+
+/// This function aligns the volume of the new speaker to the coordinator's volume
+/// If the coordinator and the new speaker have different volumes, the new speaker's volume is set to the coordinator's volume.
+///
+/// # Arguments
+///
+/// * `coordinator` - A reference to the coordinator speaker
+/// * `new_speaker` - A reference to the new speaker that needs to have its volume aligned with the coordinator
+///
+/// # Returns
+///
+/// Returns a Result with the unit type `()` if successful. If an error occurs, it returns the error.
+async fn align_speaker_volume(coordinator: &Speaker, new_speaker: &Speaker) -> Result<()> {
+    // Get the current volume of the new speaker and the coordinator
+    let speaker_volume = new_speaker.volume().await?;
+    println!("new_speaker_volume: {:?}\n", &speaker_volume);
+
+    let coordinator_volume = coordinator.volume().await?;
+    println!("coordinator_volume: {:?}\n", &coordinator_volume);
+
+    // If the coordinator and new speaker volumes are different, set the new speaker's volume to the coordinator's volume
+    if coordinator_volume != speaker_volume {
+        new_speaker.set_volume(coordinator_volume).await?;
+    }
+
+    Ok(())
 }
